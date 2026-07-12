@@ -18,6 +18,7 @@ class MusicService:
             "--dump-json",
             "--no-warnings",
             "--no-check-certificates",
+            "--force-ipv4",
             f"ytsearch{limit}:{query}",
         ]
 
@@ -47,6 +48,41 @@ class MusicService:
                 print(f"Search attempt {attempt+1} failed: {e}")
                 time.sleep(2)
 
+        return self._search_soundcloud(query, limit)
+
+    def _search_soundcloud(self, query: str, limit: int = 8) -> list[dict]:
+        cmd = [
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-json",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--force-ipv4",
+            f"scsearch{limit}:{query}",
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                tracks = []
+                for line in result.stdout.strip().split("\n"):
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            duration = data.get("duration", 0) or 0
+                            tracks.append({
+                                "id": data.get("id"),
+                                "title": data.get("title", "ناشناس"),
+                                "artist": data.get("uploader", "ناشناس"),
+                                "duration": int(duration),
+                                "url": data.get("webpage_url") or data.get("url"),
+                            })
+                        except:
+                            continue
+                return tracks
+        except Exception as e:
+            print(f"SoundCloud search failed: {e}")
+
         return []
 
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
@@ -68,6 +104,8 @@ class MusicService:
             "--newline",
             "--no-check-certificates",
             "--retries", "3",
+            "--force-ipv4",
+            "--geo-bypass",
         ]
 
         if is_youtube:
