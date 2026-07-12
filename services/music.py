@@ -4,7 +4,8 @@ import subprocess
 import glob
 import re
 import time
-from config import DOWNLOAD_PATH
+import requests
+from config import DOWNLOAD_PATH, COBALT_API_URL
 
 
 class MusicService:
@@ -86,15 +87,76 @@ class MusicService:
         return []
 
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
-        output_path = os.path.join(DOWNLOAD_PATH, output_name)
+        is_youtube = "youtube.com" in url or "youtu.be" in url
+
+        if is_youtube:
+            filepath = self._download_cobalt(url, output_name, progress_callback)
+            if filepath:
+                return filepath
+
         return self._download_yt_dlp(url, output_name, progress_callback)
+
+    def _download_cobalt(self, url: str, output_name: str, progress_callback=None) -> str | None:
+        output_path = os.path.join(DOWNLOAD_PATH, f"{output_name}.mp3")
+
+        try:
+            if progress_callback:
+                progress_callback(5)
+
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "url": url,
+                "downloadMode": "audio",
+                "audioFormat": "mp3",
+            }
+
+            response = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if "url" in data:
+                    download_url = data["url"]
+
+                    if progress_callback:
+                        progress_callback(20)
+
+                    audio_response = requests.get(download_url, stream=True, timeout=300)
+
+                    if audio_response.status_code == 200:
+                        total_size = int(audio_response.headers.get("content-length", 0))
+                        downloaded = 0
+
+                        with open(output_path, "wb") as f:
+                            for chunk in audio_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total_size > 0 and progress_callback:
+                                        percent = 20 + (downloaded / total_size) * 80
+                                        progress_callback(min(percent, 95))
+
+                        if os.path.getsize(output_path) > 1000:
+                            if progress_callback:
+                                progress_callback(100)
+                            return output_path
+                elif "error" in data:
+                    print(f"Cobalt error: {data['error']}")
+            else:
+                print(f"Cobalt HTTP error: {response.status_code}")
+
+        except Exception as e:
+            print(f"Cobalt download error: {e}")
+
+        return None
 
     def _download_yt_dlp(self, url: str, output_name: str, progress_callback=None) -> str | None:
         output_path = os.path.join(DOWNLOAD_PATH, output_name)
 
-        is_youtube = "youtube.com" in url or "youtu.be" in url
-
-        base_cmd = [
+        cmd = [
             "yt-dlp",
             "-x",
             "--audio-format", "mp3",
@@ -106,66 +168,56 @@ class MusicService:
             "--retries", "3",
             "--force-ipv4",
             "--geo-bypass",
+            url,
         ]
 
-        if is_youtube:
-            clients = ["mediaconnect", "android", "tv_embedded"]
-        else:
-            clients = [None]
+        for attempt in range(2):
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
 
-        for client in clients:
-            cmd = list(base_cmd)
-            if client:
-                cmd.extend(["--extractor-args", f"youtube:player_client={client}"])
-            cmd.append(url)
+                for line in iter(process.stdout.readline, ''):
+                    if not line:
+                        break
+                    line = line.strip()
 
-            for attempt in range(2):
-                try:
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1,
-                    )
+                    if "%" in line:
+                        try:
+                            match = re.search(r'(\d+\.?\d*)%', line)
+                            if match:
+                                percent = float(match.group(1))
+                                if progress_callback:
+                                    progress_callback(percent)
+                        except:
+                            pass
 
-                    for line in iter(process.stdout.readline, ''):
-                        if not line:
-                            break
-                        line = line.strip()
+                process.wait(timeout=300)
 
-                        if "%" in line:
+                if process.returncode == 0:
+                    mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
+                    if mp3_files:
+                        return mp3_files[0]
+
+                    for ext in ['*.webm', '*.m4a', '*.opus']:
+                        files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
+                        for f in files:
+                            new_name = f.rsplit('.', 1)[0] + '.mp3'
                             try:
-                                match = re.search(r'(\d+\.?\d*)%', line)
-                                if match:
-                                    percent = float(match.group(1))
-                                    if progress_callback:
-                                        progress_callback(percent)
+                                os.rename(f, new_name)
+                                return new_name
                             except:
                                 pass
 
-                    process.wait(timeout=300)
+                time.sleep(2)
 
-                    if process.returncode == 0:
-                        mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
-                        if mp3_files:
-                            return mp3_files[0]
-
-                        for ext in ['*.webm', '*.m4a', '*.opus']:
-                            files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
-                            for f in files:
-                                new_name = f.rsplit('.', 1)[0] + '.mp3'
-                                try:
-                                    os.rename(f, new_name)
-                                    return new_name
-                                except:
-                                    pass
-
-                    time.sleep(2)
-
-                except Exception as e:
-                    print(f"yt-dlp attempt {attempt+1} (client={client}) error: {e}")
-                    time.sleep(2)
+            except Exception as e:
+                print(f"yt-dlp attempt {attempt+1} error: {e}")
+                time.sleep(2)
 
         return None
 
