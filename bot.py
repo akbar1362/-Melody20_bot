@@ -8,18 +8,10 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN
-from handlers.start import (
-    start,
-    help_command,
-    settings_command,
-    contact_command,
-    help_callback,
-    home_callback,
-)
+from handlers.start import start, help_command, settings_command, contact_command
 from handlers.search import (
     search_command,
     download_callback,
-    page_callback,
     favorite_callback,
     noop_callback,
     popular_callback,
@@ -46,13 +38,10 @@ def main():
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("contact", contact_command))
 
-    app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl_\d+_\d+$"))
-    app.add_handler(CallbackQueryHandler(page_callback, pattern=r"^page_\d+_\d+$"))
-    app.add_handler(CallbackQueryHandler(favorite_callback, pattern=r"^fav_\d+$"))
+    app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl\d+$"))
+    app.add_handler(CallbackQueryHandler(favorite_callback, pattern=r"^fav\d+$"))
     app.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(popular_callback, pattern=r"^popular$"))
-    app.add_handler(CallbackQueryHandler(help_callback, pattern=r"^help$"))
-    app.add_handler(CallbackQueryHandler(home_callback, pattern=r"^home$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_search_handler))
 
