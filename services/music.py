@@ -3,6 +3,7 @@ import json
 import subprocess
 import glob
 import re
+import tempfile
 from config import DOWNLOAD_PATH
 
 
@@ -15,6 +16,7 @@ class MusicService:
             "yt-dlp",
             "--flat-playlist",
             "--dump-json",
+            "--no-warnings",
             f"ytsearch{limit}:{query}",
         ]
 
@@ -38,10 +40,6 @@ class MusicService:
                         except json.JSONDecodeError:
                             continue
                 return tracks
-            else:
-                print(f"Search failed: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            print("Search timeout")
         except Exception as e:
             print(f"Search error: {e}")
 
@@ -52,19 +50,21 @@ class MusicService:
 
         cmd = [
             "yt-dlp",
-            "--extract-audio",
+            "-x",
             "--audio-format", "mp3",
             "--audio-quality", "192K",
-            "--output", f"{output_path}.%(ext)s",
+            "-o", f"{output_path}.%(ext)s",
             "--no-playlist",
             "--newline",
             "--no-check-certificates",
-            "--prefer-free-formats",
+            "--extractor-args", "youtube:skip=hls,use_ssl=True",
             url,
         ]
 
         try:
             print(f"Starting download: {url}")
+            print(f"Command: {' '.join(cmd)}")
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -73,11 +73,12 @@ class MusicService:
                 bufsize=1,
             )
 
+            output_lines = []
             for line in iter(process.stdout.readline, ''):
                 if not line:
                     break
-
                 line = line.strip()
+                output_lines.append(line)
                 print(f"yt-dlp: {line}")
 
                 if "%" in line:
@@ -88,7 +89,7 @@ class MusicService:
                             if progress_callback:
                                 progress_callback(percent)
                     except Exception as e:
-                        print(f"Parse error: {e}")
+                        pass
 
             process.wait(timeout=300)
 
@@ -100,19 +101,38 @@ class MusicService:
                     print(f"Found MP3: {mp3_files[0]}")
                     return mp3_files[0]
 
-                all_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*"))
-                print(f"All files: {all_files}")
-                for f in all_files:
-                    if f.endswith(('.webm', '.m4a', '.opus')):
-                        new_name = f.rsplit('.', 1)[0] + '.mp3'
+                webm_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.webm"))
+                for f in webm_files:
+                    new_name = f.rsplit('.', 1)[0] + '.mp3'
+                    try:
                         os.rename(f, new_name)
                         print(f"Renamed to: {new_name}")
                         return new_name
+                    except:
+                        pass
+
+                m4a_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.m4a"))
+                for f in m4a_files:
+                    new_name = f.rsplit('.', 1)[0] + '.mp3'
+                    try:
+                        os.rename(f, new_name)
+                        print(f"Renamed to: {new_name}")
+                        return new_name
+                    except:
+                        pass
+
+                all_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*"))
+                print(f"All matching files: {all_files}")
+
             else:
-                print(f"Download failed with code {process.returncode}")
+                error_msg = "\n".join(output_lines[-5:]) if output_lines else "Unknown error"
+                print(f"Download failed: {error_msg}")
 
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                process.kill()
+            except:
+                pass
             print("Download timeout")
         except Exception as e:
             print(f"Download error: {e}")
