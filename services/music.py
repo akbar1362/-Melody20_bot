@@ -51,25 +51,34 @@ class MusicService:
 
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
         output_path = os.path.join(DOWNLOAD_PATH, output_name)
+        return self._download_yt_dlp(url, output_name, progress_callback)
+
+    def _download_yt_dlp(self, url: str, output_name: str, progress_callback=None) -> str | None:
+        output_path = os.path.join(DOWNLOAD_PATH, output_name)
+
+        is_youtube = "youtube.com" in url or "youtu.be" in url
 
         cmd = [
             "yt-dlp",
             "-x",
             "--audio-format", "mp3",
-            "--audio-quality", "192K",
+            "--audio-quality", "128K",
             "-o", f"{output_path}.%(ext)s",
             "--no-playlist",
             "--newline",
             "--no-check-certificates",
             "--retries", "3",
-            "--fragment-retries", "3",
-            url,
         ]
 
-        for attempt in range(3):
-            try:
-                print(f"Download attempt {attempt+1}: {url}")
+        if is_youtube:
+            cmd.extend([
+                "--extractor-args", "youtube:player_client=android",
+            ])
 
+        cmd.append(url)
+
+        for attempt in range(2):
+            try:
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -110,18 +119,10 @@ class MusicService:
                             except:
                                 pass
 
-                print(f"Attempt {attempt+1} failed")
                 time.sleep(2)
 
-            except subprocess.TimeoutExpired:
-                try:
-                    process.kill()
-                except:
-                    pass
-                print(f"Attempt {attempt+1} timeout")
-                time.sleep(2)
             except Exception as e:
-                print(f"Attempt {attempt+1} error: {e}")
+                print(f"yt-dlp attempt {attempt+1} error: {e}")
                 time.sleep(2)
 
         return None
