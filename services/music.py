@@ -19,22 +19,29 @@ class MusicService:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode == 0:
                 tracks = []
                 for line in result.stdout.strip().split("\n"):
                     if line:
-                        data = json.loads(line)
-                        duration = data.get("duration", 0) or 0
-                        tracks.append({
-                            "id": data.get("id"),
-                            "title": data.get("title", "ناشناس"),
-                            "artist": data.get("uploader", "ناشناس"),
-                            "duration": int(duration),
-                            "url": f"https://www.youtube.com/watch?v={data.get('id')}",
-                            "thumbnail": data.get("thumbnail", ""),
-                        })
+                        try:
+                            data = json.loads(line)
+                            duration = data.get("duration", 0) or 0
+                            tracks.append({
+                                "id": data.get("id"),
+                                "title": data.get("title", "ناشناس"),
+                                "artist": data.get("uploader", "ناشناس"),
+                                "duration": int(duration),
+                                "url": f"https://www.youtube.com/watch?v={data.get('id')}",
+                                "thumbnail": data.get("thumbnail", ""),
+                            })
+                        except json.JSONDecodeError:
+                            continue
                 return tracks
+            else:
+                print(f"Search failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("Search timeout")
         except Exception as e:
             print(f"Search error: {e}")
 
@@ -47,14 +54,17 @@ class MusicService:
             "yt-dlp",
             "--extract-audio",
             "--audio-format", "mp3",
-            "--audio-quality", "320K",
+            "--audio-quality", "192K",
             "--output", f"{output_path}.%(ext)s",
             "--no-playlist",
             "--newline",
+            "--no-check-certificates",
+            "--prefer-free-formats",
             url,
         ]
 
         try:
+            print(f"Starting download: {url}")
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -68,6 +78,7 @@ class MusicService:
                     break
 
                 line = line.strip()
+                print(f"yt-dlp: {line}")
 
                 if "%" in line:
                     try:
@@ -79,19 +90,26 @@ class MusicService:
                     except Exception as e:
                         print(f"Parse error: {e}")
 
-            process.wait(timeout=180)
+            process.wait(timeout=300)
+
+            print(f"Process return code: {process.returncode}")
 
             if process.returncode == 0:
                 mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
                 if mp3_files:
+                    print(f"Found MP3: {mp3_files[0]}")
                     return mp3_files[0]
 
                 all_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*"))
+                print(f"All files: {all_files}")
                 for f in all_files:
                     if f.endswith(('.webm', '.m4a', '.opus')):
                         new_name = f.rsplit('.', 1)[0] + '.mp3'
                         os.rename(f, new_name)
+                        print(f"Renamed to: {new_name}")
                         return new_name
+            else:
+                print(f"Download failed with code {process.returncode}")
 
         except subprocess.TimeoutExpired:
             process.kill()
