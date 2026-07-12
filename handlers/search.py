@@ -88,7 +88,13 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        await query.edit_message_text(f"📥 در حال دانلود:\n\n🎵 {track['title']}\n👤 {track['artist']}\n\n⏳ لطفاً صبر کن...")
+        await query.edit_message_text(
+            f"📥 در حال دانلود:\n\n"
+            f"🎵 {track['title']}\n"
+            f"👤 {track['artist']}\n\n"
+            f"⏳ لطفاً صبر کن...\n"
+            f"💡 اگه طول کشید دوباره امتحان کن"
+        )
     except:
         pass
 
@@ -120,9 +126,9 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     title=track["title"],
                     performer=track["artist"],
                     caption=caption,
-                    read_timeout=300,
-                    write_timeout=300,
-                    connect_timeout=300,
+                    read_timeout=600,
+                    write_timeout=600,
+                    connect_timeout=600,
                 )
 
             await query.edit_message_text(
@@ -134,12 +140,22 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"Send error: {e}")
             try:
-                await query.edit_message_text("❌ خطا در ارسال. دوباره تلاش کن.")
+                await query.edit_message_text(
+                    "❌ خطا در ارسال.\n\n"
+                    "💡 آهنگ دانلود شد ولی ارسال نشد.\n"
+                    "دوباره تلاش کن."
+                )
             except:
                 pass
     else:
         try:
-            await query.edit_message_text("❌ خطا در دانلود. دوباره تلاش کن.")
+            await query.edit_message_text(
+                "❌ خطا در دانلود.\n\n"
+                "💡 دلایل احتمالی:\n"
+                "• مشکل اینترنت سرور\n"
+                "• یوتیوب محدود کرده\n\n"
+                "🔄 چند لحظه صبر کن و دوباره امتحان کن"
+            )
         except:
             pass
 
