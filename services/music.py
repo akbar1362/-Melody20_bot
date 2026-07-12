@@ -58,7 +58,7 @@ class MusicService:
 
         is_youtube = "youtube.com" in url or "youtu.be" in url
 
-        cmd = [
+        base_cmd = [
             "yt-dlp",
             "-x",
             "--audio-format", "mp3",
@@ -71,59 +71,63 @@ class MusicService:
         ]
 
         if is_youtube:
-            cmd.extend([
-                "--extractor-args", "youtube:player_client=android",
-            ])
+            clients = ["mediaconnect", "android", "tv_embedded"]
+        else:
+            clients = [None]
 
-        cmd.append(url)
+        for client in clients:
+            cmd = list(base_cmd)
+            if client:
+                cmd.extend(["--extractor-args", f"youtube:player_client={client}"])
+            cmd.append(url)
 
-        for attempt in range(2):
-            try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
+            for attempt in range(2):
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
 
-                for line in iter(process.stdout.readline, ''):
-                    if not line:
-                        break
-                    line = line.strip()
+                    for line in iter(process.stdout.readline, ''):
+                        if not line:
+                            break
+                        line = line.strip()
 
-                    if "%" in line:
-                        try:
-                            match = re.search(r'(\d+\.?\d*)%', line)
-                            if match:
-                                percent = float(match.group(1))
-                                if progress_callback:
-                                    progress_callback(percent)
-                        except:
-                            pass
-
-                process.wait(timeout=300)
-
-                if process.returncode == 0:
-                    mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
-                    if mp3_files:
-                        return mp3_files[0]
-
-                    for ext in ['*.webm', '*.m4a', '*.opus']:
-                        files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
-                        for f in files:
-                            new_name = f.rsplit('.', 1)[0] + '.mp3'
+                        if "%" in line:
                             try:
-                                os.rename(f, new_name)
-                                return new_name
+                                match = re.search(r'(\d+\.?\d*)%', line)
+                                if match:
+                                    percent = float(match.group(1))
+                                    if progress_callback:
+                                        progress_callback(percent)
                             except:
                                 pass
 
-                time.sleep(2)
+                    process.wait(timeout=300)
 
-            except Exception as e:
-                print(f"yt-dlp attempt {attempt+1} error: {e}")
-                time.sleep(2)
+                    if process.returncode == 0:
+                        mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
+                        if mp3_files:
+                            return mp3_files[0]
+
+                        for ext in ['*.webm', '*.m4a', '*.opus']:
+                            files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
+                            for f in files:
+                                new_name = f.rsplit('.', 1)[0] + '.mp3'
+                                try:
+                                    os.rename(f, new_name)
+                                    return new_name
+                                except:
+                                    pass
+
+                    time.sleep(2)
+
+                except Exception as e:
+                    print(f"yt-dlp attempt {attempt+1} (client={client}) error: {e}")
+                    time.sleep(2)
 
         return None
 
