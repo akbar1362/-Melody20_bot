@@ -17,25 +17,10 @@ class MusicService:
 
         yt_tracks = self._search_youtube(query, limit)
         if yt_tracks:
-            print(f"[SEARCH] YouTube: {len(yt_tracks)} results, now finding on SoundCloud...")
-            sc_tracks = []
-            for track in yt_tracks[:limit]:
-                search_query = f"{track['artist']} {track['title']}"
-                sc_result = self._search_soundcloud(search_query, limit=1)
-                if sc_result:
-                    sc_track = sc_result[0]
-                    sc_track['title'] = track['title']
-                    sc_track['artist'] = track['artist']
-                    sc_tracks.append(sc_track)
-                    print(f"[SEARCH] Found on SC: {track['title']}")
-                else:
-                    print(f"[SEARCH] Not on SC: {track['title']}, using YouTube URL")
-                    sc_tracks.append(track)
-                time.sleep(0.5)
-            if sc_tracks:
-                return sc_tracks
+            print(f"[SEARCH] YouTube: {len(yt_tracks)} results")
+            return yt_tracks
 
-        print("[SEARCH] YouTube search failed, using SoundCloud direct")
+        print("[SEARCH] YouTube failed, trying SoundCloud")
         return self._search_soundcloud(query, limit)
 
     def _search_soundcloud(self, query: str, limit: int = 8) -> list[dict]:
@@ -115,7 +100,7 @@ class MusicService:
                 time.sleep(2)
         return []
 
-    def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
+    def download_with_progress(self, url: str, output_name: str, progress_callback=None, track_info=None) -> str | None:
         print(f"[DOWNLOAD] URL: {url}")
 
         is_soundcloud = "soundcloud.com" in url or "api.soundcloud.com" in url
@@ -134,6 +119,18 @@ class MusicService:
                 filepath = self._download_youtube(url, output_name, progress_callback, client)
                 if filepath:
                     return filepath
+
+            if track_info:
+                search_query = f"{track_info.get('artist', '')} {track_info.get('title', '')}"
+                print(f"[DOWNLOAD] YouTube failed, searching SoundCloud: {search_query}")
+                sc_results = self._search_soundcloud(search_query, limit=1)
+                if sc_results:
+                    sc_url = sc_results[0].get('url')
+                    if sc_url:
+                        print(f"[DOWNLOAD] Found on SoundCloud: {sc_url}")
+                        filepath = self._download_soundcloud(sc_url, output_name, progress_callback)
+                        if filepath:
+                            return filepath
 
         print("[DOWNLOAD] Trying yt-dlp direct...")
         filepath = self._download_yt_dlp(url, output_name, progress_callback)

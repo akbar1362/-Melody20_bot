@@ -103,7 +103,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     def progress(p):
         pass
 
-    filepath = music_service.download_with_progress(url, output_name, progress)
+    filepath = music_service.download_with_progress(url, output_name, progress, track_info=track)
 
     if filepath:
         try:
