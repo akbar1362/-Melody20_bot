@@ -15,9 +15,14 @@ class MusicService:
     def search(self, query: str, limit: int = 8) -> list[dict]:
         tracks = self._search_soundcloud(query, limit)
         if tracks:
+            print(f"[SEARCH] Found {len(tracks)} SoundCloud results")
             return tracks
 
-        return self._search_youtube(query, limit)
+        print("[SEARCH] SoundCloud empty, trying YouTube")
+        tracks = self._search_youtube(query, limit)
+        if tracks:
+            print(f"[SEARCH] Found {len(tracks)} YouTube results")
+        return tracks
 
     def _search_soundcloud(self, query: str, limit: int = 8) -> list[dict]:
         cmd = [
@@ -33,7 +38,7 @@ class MusicService:
         for attempt in range(2):
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode == 0:
+                if result.returncode == 0 and result.stdout.strip():
                     tracks = []
                     for line in result.stdout.strip().split("\n"):
                         if line:
@@ -53,9 +58,11 @@ class MusicService:
                                 continue
                     if tracks:
                         return tracks
+                else:
+                    print(f"[SC_SEARCH] stderr: {result.stderr[:200]}")
                 time.sleep(1)
             except Exception as e:
-                print(f"SoundCloud search attempt {attempt+1} failed: {e}")
+                print(f"[SC_SEARCH] error: {e}")
                 time.sleep(2)
 
         return []
@@ -74,7 +81,7 @@ class MusicService:
         for attempt in range(2):
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode == 0:
+                if result.returncode == 0 and result.stdout.strip():
                     tracks = []
                     for line in result.stdout.strip().split("\n"):
                         if line:
@@ -93,28 +100,46 @@ class MusicService:
                                 continue
                     if tracks:
                         return tracks
+                else:
+                    print(f"[YT_SEARCH] stderr: {result.stderr[:200]}")
                 time.sleep(1)
             except Exception as e:
-                print(f"YouTube search attempt {attempt+1} failed: {e}")
+                print(f"[YT_SEARCH] error: {e}")
                 time.sleep(2)
 
         return []
 
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
+        print(f"[DOWNLOAD] URL: {url}")
+        print(f"[DOWNLOAD] Name: {output_name}")
+
         is_soundcloud = "soundcloud.com" in url or "api.soundcloud.com" in url
+        is_youtube = "youtube.com" in url or "youtu.be" in url
 
         if is_soundcloud:
+            print("[DOWNLOAD] Trying SoundCloud...")
             filepath = self._download_soundcloud(url, output_name, progress_callback)
             if filepath:
+                print(f"[DOWNLOAD] SoundCloud OK: {filepath}")
                 return filepath
+            print("[DOWNLOAD] SoundCloud failed")
 
-        is_youtube = "youtube.com" in url or "youtu.be" in url
         if is_youtube:
+            print("[DOWNLOAD] Trying cobalt...")
             filepath = self._download_cobalt(url, output_name, progress_callback)
             if filepath:
+                print(f"[DOWNLOAD] Cobalt OK: {filepath}")
                 return filepath
+            print("[DOWNLOAD] Cobalt failed")
 
-        return self._download_yt_dlp(url, output_name, progress_callback)
+        print("[DOWNLOAD] Trying yt-dlp fallback...")
+        filepath = self._download_yt_dlp(url, output_name, progress_callback)
+        if filepath:
+            print(f"[DOWNLOAD] yt-dlp OK: {filepath}")
+            return filepath
+
+        print("[DOWNLOAD] ALL METHODS FAILED")
+        return None
 
     def _download_soundcloud(self, url: str, output_name: str, progress_callback=None) -> str | None:
         output_path = os.path.join(DOWNLOAD_PATH, output_name)
@@ -129,7 +154,7 @@ class MusicService:
             "--newline",
             "--no-check-certificates",
             "--force-ipv4",
-            "--format", "http_mp3_1_0",
+            "--no-overwrites",
             url,
         ]
 
@@ -137,38 +162,31 @@ class MusicService:
             if progress_callback:
                 progress_callback(5)
 
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
+            print(f"[SC_DL] Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            print(f"[SC_DL] Return code: {result.returncode}")
+            print(f"[SC_DL] stdout: {result.stdout[-300:]}")
+            print(f"[SC_DL] stderr: {result.stderr[-300:]}")
 
-            for line in iter(process.stdout.readline, ''):
-                if not line:
-                    break
-                line = line.strip()
+            if progress_callback:
+                progress_callback(90)
 
-                if "%" in line:
-                    try:
-                        match = re.search(r'(\d+\.?\d*)%', line)
-                        if match:
-                            percent = float(match.group(1))
-                            if progress_callback:
-                                progress_callback(percent)
-                    except:
-                        pass
-
-            process.wait(timeout=300)
-
-            if process.returncode == 0:
+            if result.returncode == 0:
                 mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
                 if mp3_files:
-                    return mp3_files[0]
+                    filepath = mp3_files[0]
+                    size = os.path.getsize(filepath)
+                    print(f"[SC_DL] Found: {filepath} ({size} bytes)")
+                    if progress_callback:
+                        progress_callback(100)
+                    return filepath
 
+                print("[SC_DL] No MP3 file found after download")
+
+        except subprocess.TimeoutExpired:
+            print("[SC_DL] TIMEOUT after 300s")
         except Exception as e:
-            print(f"SoundCloud download error: {e}")
+            print(f"[SC_DL] Exception: {e}")
 
         return None
 
@@ -179,6 +197,7 @@ class MusicService:
             if progress_callback:
                 progress_callback(5)
 
+            print(f"[COBALT] API: {COBALT_API_URL}")
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -190,17 +209,18 @@ class MusicService:
             }
 
             response = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=30)
+            print(f"[COBALT] Status: {response.status_code}")
+            print(f"[COBALT] Body: {response.text[:200]}")
 
             if response.status_code == 200:
                 data = response.json()
-
                 if "url" in data:
                     download_url = data["url"]
-
                     if progress_callback:
                         progress_callback(20)
 
                     audio_response = requests.get(download_url, stream=True, timeout=300)
+                    print(f"[COBALT] Download status: {audio_response.status_code}")
 
                     if audio_response.status_code == 200:
                         total_size = int(audio_response.headers.get("content-length", 0))
@@ -215,13 +235,16 @@ class MusicService:
                                         percent = 20 + (downloaded / total_size) * 80
                                         progress_callback(min(percent, 95))
 
-                        if os.path.getsize(output_path) > 1000:
+                        file_size = os.path.getsize(output_path)
+                        print(f"[COBALT] Saved: {output_path} ({file_size} bytes)")
+
+                        if file_size > 1000:
                             if progress_callback:
                                 progress_callback(100)
                             return output_path
 
         except Exception as e:
-            print(f"Cobalt download error: {e}")
+            print(f"[COBALT] Exception: {e}")
 
         return None
 
@@ -245,50 +268,22 @@ class MusicService:
 
         for attempt in range(2):
             try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
+                print(f"[YTDLP] Attempt {attempt+1}: {url}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                print(f"[YTDLP] Return code: {result.returncode}")
+                print(f"[YTDLP] stderr: {result.stderr[-300:]}")
 
-                for line in iter(process.stdout.readline, ''):
-                    if not line:
-                        break
-                    line = line.strip()
-
-                    if "%" in line:
-                        try:
-                            match = re.search(r'(\d+\.?\d*)%', line)
-                            if match:
-                                percent = float(match.group(1))
-                                if progress_callback:
-                                    progress_callback(percent)
-                        except:
-                            pass
-
-                process.wait(timeout=300)
-
-                if process.returncode == 0:
+                if result.returncode == 0:
                     mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
                     if mp3_files:
                         return mp3_files[0]
 
-                    for ext in ['*.webm', '*.m4a', '*.opus']:
-                        files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
-                        for f in files:
-                            new_name = f.rsplit('.', 1)[0] + '.mp3'
-                            try:
-                                os.rename(f, new_name)
-                                return new_name
-                            except:
-                                pass
-
                 time.sleep(2)
 
+            except subprocess.TimeoutExpired:
+                print(f"[YTDLP] TIMEOUT attempt {attempt+1}")
             except Exception as e:
-                print(f"yt-dlp attempt {attempt+1} error: {e}")
+                print(f"[YTDLP] Exception: {e}")
                 time.sleep(2)
 
         return None
