@@ -7,26 +7,15 @@ import time
 import requests
 from config import DOWNLOAD_PATH
 
-WARP_PROXY = "socks5://127.0.0.1:40000"
-
+def get_warp_proxy():
+    proxy = os.environ.get("WARP_PROXY", "")
+    if proxy:
+        print(f"[WARP] Using proxy: {proxy}")
+    return proxy
 
 class MusicService:
     def __init__(self):
         os.makedirs(DOWNLOAD_PATH, exist_ok=True)
-        self._check_warp()
-
-    def _check_warp(self):
-        try:
-            result = subprocess.run(
-                ["curl", "-s", "--proxy", WARP_PROXY, "--max-time", "5", "https://ifconfig.me"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                print(f"[WARP] OK - IP: {result.stdout.strip()}")
-            else:
-                print(f"[WARP] Failed: {result.stderr[:100]}")
-        except Exception as e:
-            print(f"[WARP] Check failed: {e}")
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
         cmd = [
@@ -147,10 +136,14 @@ class MusicService:
             "--no-check-certificates",
             "--force-ipv4",
             "--retries", "3",
-            "--proxy", WARP_PROXY,
             "--extractor-args", f"youtube:player_client={client}",
             url,
         ]
+
+        proxy = get_warp_proxy()
+        if proxy:
+            cmd.insert(-1, "--proxy")
+            cmd.insert(-1, proxy)
 
         try:
             if progress_callback:
