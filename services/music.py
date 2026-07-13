@@ -83,16 +83,26 @@ class MusicService:
                             try:
                                 data = json.loads(line)
                                 duration = data.get("duration", 0) or 0
+                                title = data.get("title", "ناشناس")
+                                artist = data.get("uploader", "ناشناس")
+
+                                if any(k in title.lower() for k in query.lower().split()):
+                                    priority = 0
+                                else:
+                                    priority = 1
+
                                 tracks.append({
                                     "id": data.get("id"),
-                                    "title": data.get("title", "ناشناس"),
-                                    "artist": data.get("uploader", "ناشناس"),
+                                    "title": title,
+                                    "artist": artist,
                                     "duration": int(duration),
                                     "url": f"https://www.youtube.com/watch?v={data.get('id')}",
+                                    "priority": priority,
                                 })
                             except:
                                 continue
                     if tracks:
+                        tracks.sort(key=lambda x: x["priority"])
                         return tracks
                 time.sleep(1)
             except Exception as e:
@@ -120,22 +130,21 @@ class MusicService:
                 if filepath:
                     return filepath
 
-            if track_info:
-                search_query = f"{track_info.get('artist', '')} {track_info.get('title', '')}"
-                print(f"[DOWNLOAD] YouTube failed, searching SoundCloud: {search_query}")
-                sc_results = self._search_soundcloud(search_query, limit=1)
-                if sc_results:
-                    sc_url = sc_results[0].get('url')
-                    if sc_url:
-                        print(f"[DOWNLOAD] Found on SoundCloud: {sc_url}")
-                        filepath = self._download_soundcloud(sc_url, output_name, progress_callback)
-                        if filepath:
-                            return filepath
-
         print("[DOWNLOAD] Trying yt-dlp direct...")
         filepath = self._download_yt_dlp(url, output_name, progress_callback)
         if filepath:
             return filepath
+
+        if track_info and is_youtube:
+            search_query = f"{track_info.get('artist', '')} {track_info.get('title', '')}"
+            print(f"[DOWNLOAD] All YouTube failed, SoundCloud: {search_query}")
+            sc_results = self._search_soundcloud(search_query, limit=1)
+            if sc_results:
+                sc_url = sc_results[0].get('url')
+                if sc_url:
+                    filepath = self._download_soundcloud(sc_url, output_name, progress_callback)
+                    if filepath:
+                        return filepath
 
         print("[DOWNLOAD] ALL FAILED")
         return None
