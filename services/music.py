@@ -13,16 +13,30 @@ class MusicService:
         os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
-        tracks = self._search_soundcloud(query, limit)
-        if tracks:
-            print(f"[SEARCH] SoundCloud: {len(tracks)} results")
-            return tracks
+        print(f"[SEARCH] Query: {query}")
 
-        print("[SEARCH] SoundCloud empty, trying YouTube")
-        tracks = self._search_youtube(query, limit)
-        if tracks:
-            print(f"[SEARCH] YouTube: {len(tracks)} results")
-        return tracks
+        yt_tracks = self._search_youtube(query, limit)
+        if yt_tracks:
+            print(f"[SEARCH] YouTube: {len(yt_tracks)} results, now finding on SoundCloud...")
+            sc_tracks = []
+            for track in yt_tracks[:limit]:
+                search_query = f"{track['artist']} {track['title']}"
+                sc_result = self._search_soundcloud(search_query, limit=1)
+                if sc_result:
+                    sc_track = sc_result[0]
+                    sc_track['title'] = track['title']
+                    sc_track['artist'] = track['artist']
+                    sc_tracks.append(sc_track)
+                    print(f"[SEARCH] Found on SC: {track['title']}")
+                else:
+                    print(f"[SEARCH] Not on SC: {track['title']}, using YouTube URL")
+                    sc_tracks.append(track)
+                time.sleep(0.5)
+            if sc_tracks:
+                return sc_tracks
+
+        print("[SEARCH] YouTube search failed, using SoundCloud direct")
+        return self._search_soundcloud(query, limit)
 
     def _search_soundcloud(self, query: str, limit: int = 8) -> list[dict]:
         cmd = [
@@ -104,7 +118,14 @@ class MusicService:
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
         print(f"[DOWNLOAD] URL: {url}")
 
+        is_soundcloud = "soundcloud.com" in url or "api.soundcloud.com" in url
         is_youtube = "youtube.com" in url or "youtu.be" in url
+
+        if is_soundcloud:
+            print("[DOWNLOAD] SoundCloud direct...")
+            filepath = self._download_soundcloud(url, output_name, progress_callback)
+            if filepath:
+                return filepath
 
         if is_youtube:
             clients = ["mediaconnect", "android", "tv_embedded"]
@@ -120,6 +141,38 @@ class MusicService:
             return filepath
 
         print("[DOWNLOAD] ALL FAILED")
+        return None
+
+    def _download_soundcloud(self, url, output_name, progress_callback=None):
+        output_path = os.path.join(DOWNLOAD_PATH, output_name)
+
+        cmd = [
+            "yt-dlp", "-x",
+            "--audio-format", "mp3",
+            "--audio-quality", "128K",
+            "-o", f"{output_path}.%(ext)s",
+            "--no-playlist", "--newline",
+            "--no-check-certificates",
+            "--force-ipv4",
+            url,
+        ]
+
+        try:
+            if progress_callback:
+                progress_callback(5)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            print(f"[SC_DL] code={result.returncode}")
+
+            if result.returncode == 0:
+                return self._find_mp3(output_name, progress_callback)
+            else:
+                print(f"[SC_DL] err: {result.stderr[-150:]}")
+
+        except subprocess.TimeoutExpired:
+            print("[SC_DL] TIMEOUT")
+        except Exception as e:
+            print(f"[SC_DL] error: {e}")
         return None
 
     def _download_youtube(self, url, output_name, progress_callback=None, client="mediaconnect"):
