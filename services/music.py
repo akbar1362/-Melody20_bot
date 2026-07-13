@@ -5,24 +5,68 @@ import glob
 import re
 import time
 import requests
-from config import DOWNLOAD_PATH, COBALT_API_URL
+from config import DOWNLOAD_PATH
+
+WARP_PROXY = "socks5://127.0.0.1:40000"
 
 
 class MusicService:
     def __init__(self):
         os.makedirs(DOWNLOAD_PATH, exist_ok=True)
+        self._check_warp()
+
+    def _check_warp(self):
+        try:
+            result = subprocess.run(
+                ["curl", "-s", "--proxy", WARP_PROXY, "--max-time", "5", "https://ifconfig.me"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                print(f"[WARP] OK - IP: {result.stdout.strip()}")
+            else:
+                print(f"[WARP] Failed: {result.stderr[:100]}")
+        except Exception as e:
+            print(f"[WARP] Check failed: {e}")
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
-        tracks = self._search_soundcloud(query, limit)
-        if tracks:
-            print(f"[SEARCH] Found {len(tracks)} SoundCloud results")
-            return tracks
+        cmd = [
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-json",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--force-ipv4",
+            f"ytsearch{limit}:{query}",
+        ]
 
-        print("[SEARCH] SoundCloud empty, trying YouTube")
-        tracks = self._search_youtube(query, limit)
-        if tracks:
-            print(f"[SEARCH] Found {len(tracks)} YouTube results")
-        return tracks
+        for attempt in range(3):
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0 and result.stdout.strip():
+                    tracks = []
+                    for line in result.stdout.strip().split("\n"):
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                duration = data.get("duration", 0) or 0
+                                tracks.append({
+                                    "id": data.get("id"),
+                                    "title": data.get("title", "ناشناس"),
+                                    "artist": data.get("uploader", "ناشناس"),
+                                    "duration": int(duration),
+                                    "url": f"https://www.youtube.com/watch?v={data.get('id')}",
+                                })
+                            except:
+                                continue
+                    if tracks:
+                        print(f"[SEARCH] Found {len(tracks)} results")
+                        return tracks
+                time.sleep(1)
+            except Exception as e:
+                print(f"[SEARCH] attempt {attempt+1} failed: {e}")
+                time.sleep(2)
+
+        return self._search_soundcloud(query, limit)
 
     def _search_soundcloud(self, query: str, limit: int = 8) -> list[dict]:
         cmd = [
@@ -57,9 +101,8 @@ class MusicService:
                             except:
                                 continue
                     if tracks:
+                        print(f"[SEARCH] SoundCloud fallback: {len(tracks)} results")
                         return tracks
-                else:
-                    print(f"[SC_SEARCH] stderr: {result.stderr[:200]}")
                 time.sleep(1)
             except Exception as e:
                 print(f"[SC_SEARCH] error: {e}")
@@ -67,81 +110,30 @@ class MusicService:
 
         return []
 
-    def _search_youtube(self, query: str, limit: int = 8) -> list[dict]:
-        cmd = [
-            "yt-dlp",
-            "--flat-playlist",
-            "--dump-json",
-            "--no-warnings",
-            "--no-check-certificates",
-            "--force-ipv4",
-            f"ytsearch{limit}:{query}",
-        ]
-
-        for attempt in range(2):
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode == 0 and result.stdout.strip():
-                    tracks = []
-                    for line in result.stdout.strip().split("\n"):
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                duration = data.get("duration", 0) or 0
-                                tracks.append({
-                                    "id": data.get("id"),
-                                    "title": data.get("title", "ناشناس"),
-                                    "artist": data.get("uploader", "ناشناس"),
-                                    "duration": int(duration),
-                                    "url": f"https://www.youtube.com/watch?v={data.get('id')}",
-                                    "source": "youtube",
-                                })
-                            except:
-                                continue
-                    if tracks:
-                        return tracks
-                else:
-                    print(f"[YT_SEARCH] stderr: {result.stderr[:200]}")
-                time.sleep(1)
-            except Exception as e:
-                print(f"[YT_SEARCH] error: {e}")
-                time.sleep(2)
-
-        return []
-
     def download_with_progress(self, url: str, output_name: str, progress_callback=None) -> str | None:
         print(f"[DOWNLOAD] URL: {url}")
-        print(f"[DOWNLOAD] Name: {output_name}")
 
-        is_soundcloud = "soundcloud.com" in url or "api.soundcloud.com" in url
         is_youtube = "youtube.com" in url or "youtu.be" in url
 
-        if is_soundcloud:
-            print("[DOWNLOAD] Trying SoundCloud...")
-            filepath = self._download_soundcloud(url, output_name, progress_callback)
-            if filepath:
-                print(f"[DOWNLOAD] SoundCloud OK: {filepath}")
-                return filepath
-            print("[DOWNLOAD] SoundCloud failed")
-
         if is_youtube:
-            print("[DOWNLOAD] Trying cobalt...")
-            filepath = self._download_cobalt(url, output_name, progress_callback)
-            if filepath:
-                print(f"[DOWNLOAD] Cobalt OK: {filepath}")
-                return filepath
-            print("[DOWNLOAD] Cobalt failed")
+            clients = ["mediaconnect", "android", "tv_embedded"]
+            for client in clients:
+                print(f"[DOWNLOAD] Trying YouTube ({client}) with WARP proxy...")
+                filepath = self._download_youtube(url, output_name, progress_callback, client)
+                if filepath:
+                    print(f"[DOWNLOAD] YouTube ({client}) OK!")
+                    return filepath
+                print(f"[DOWNLOAD] YouTube ({client}) failed, trying next...")
 
-        print("[DOWNLOAD] Trying yt-dlp fallback...")
-        filepath = self._download_yt_dlp(url, output_name, progress_callback)
+        print(f"[DOWNLOAD] Trying direct yt-dlp (no proxy)...")
+        filepath = self._download_yt_dlp_direct(url, output_name, progress_callback)
         if filepath:
-            print(f"[DOWNLOAD] yt-dlp OK: {filepath}")
             return filepath
 
         print("[DOWNLOAD] ALL METHODS FAILED")
         return None
 
-    def _download_soundcloud(self, url: str, output_name: str, progress_callback=None) -> str | None:
+    def _download_youtube(self, url: str, output_name: str, progress_callback=None, client="mediaconnect") -> str | None:
         output_path = os.path.join(DOWNLOAD_PATH, output_name)
 
         cmd = [
@@ -154,7 +146,9 @@ class MusicService:
             "--newline",
             "--no-check-certificates",
             "--force-ipv4",
-            "--no-overwrites",
+            "--retries", "3",
+            "--proxy", WARP_PROXY,
+            "--extractor-args", f"youtube:player_client={client}",
             url,
         ]
 
@@ -162,94 +156,45 @@ class MusicService:
             if progress_callback:
                 progress_callback(5)
 
-            print(f"[SC_DL] Running: {' '.join(cmd)}")
+            print(f"[YT_DL] Running with proxy: {client}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            print(f"[SC_DL] Return code: {result.returncode}")
-            print(f"[SC_DL] stdout: {result.stdout[-300:]}")
-            print(f"[SC_DL] stderr: {result.stderr[-300:]}")
-
-            if progress_callback:
-                progress_callback(90)
+            print(f"[YT_DL] Return code: {result.returncode}")
 
             if result.returncode == 0:
                 mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
                 if mp3_files:
                     filepath = mp3_files[0]
                     size = os.path.getsize(filepath)
-                    print(f"[SC_DL] Found: {filepath} ({size} bytes)")
+                    print(f"[YT_DL] Found: {filepath} ({size} bytes)")
                     if progress_callback:
                         progress_callback(100)
                     return filepath
 
-                print("[SC_DL] No MP3 file found after download")
+                for ext in ['*.webm', '*.m4a', '*.opus']:
+                    files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
+                    for f in files:
+                        new_name = f.rsplit('.', 1)[0] + '.mp3'
+                        try:
+                            os.rename(f, new_name)
+                            return new_name
+                        except:
+                            pass
+            else:
+                stderr_short = result.stderr[-200:] if result.stderr else "none"
+                print(f"[YT_DL] Failed: {stderr_short}")
 
         except subprocess.TimeoutExpired:
-            print("[SC_DL] TIMEOUT after 300s")
+            print("[YT_DL] TIMEOUT")
         except Exception as e:
-            print(f"[SC_DL] Exception: {e}")
+            print(f"[YT_DL] Exception: {e}")
 
         return None
 
-    def _download_cobalt(self, url: str, output_name: str, progress_callback=None) -> str | None:
-        output_path = os.path.join(DOWNLOAD_PATH, f"{output_name}.mp3")
-
-        try:
-            if progress_callback:
-                progress_callback(5)
-
-            print(f"[COBALT] API: {COBALT_API_URL}")
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "url": url,
-                "downloadMode": "audio",
-                "audioFormat": "mp3",
-            }
-
-            response = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=30)
-            print(f"[COBALT] Status: {response.status_code}")
-            print(f"[COBALT] Body: {response.text[:200]}")
-
-            if response.status_code == 200:
-                data = response.json()
-                if "url" in data:
-                    download_url = data["url"]
-                    if progress_callback:
-                        progress_callback(20)
-
-                    audio_response = requests.get(download_url, stream=True, timeout=300)
-                    print(f"[COBALT] Download status: {audio_response.status_code}")
-
-                    if audio_response.status_code == 200:
-                        total_size = int(audio_response.headers.get("content-length", 0))
-                        downloaded = 0
-
-                        with open(output_path, "wb") as f:
-                            for chunk in audio_response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                                    downloaded += len(chunk)
-                                    if total_size > 0 and progress_callback:
-                                        percent = 20 + (downloaded / total_size) * 80
-                                        progress_callback(min(percent, 95))
-
-                        file_size = os.path.getsize(output_path)
-                        print(f"[COBALT] Saved: {output_path} ({file_size} bytes)")
-
-                        if file_size > 1000:
-                            if progress_callback:
-                                progress_callback(100)
-                            return output_path
-
-        except Exception as e:
-            print(f"[COBALT] Exception: {e}")
-
-        return None
-
-    def _download_yt_dlp(self, url: str, output_name: str, progress_callback=None) -> str | None:
+    def _download_yt_dlp_direct(self, url: str, output_name: str, progress_callback=None) -> str | None:
         output_path = os.path.join(DOWNLOAD_PATH, output_name)
+
+        is_youtube = "youtube.com" in url or "youtu.be" in url
+        is_soundcloud = "soundcloud.com" in url or "api.soundcloud.com" in url
 
         cmd = [
             "yt-dlp",
@@ -262,29 +207,48 @@ class MusicService:
             "--no-check-certificates",
             "--retries", "3",
             "--force-ipv4",
-            "--geo-bypass",
-            url,
         ]
 
-        for attempt in range(2):
-            try:
-                print(f"[YTDLP] Attempt {attempt+1}: {url}")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                print(f"[YTDLP] Return code: {result.returncode}")
-                print(f"[YTDLP] stderr: {result.stderr[-300:]}")
+        if is_youtube:
+            cmd.extend(["--extractor-args", "youtube:player_client=mediaconnect"])
 
-                if result.returncode == 0:
-                    mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
-                    if mp3_files:
-                        return mp3_files[0]
+        cmd.append(url)
 
-                time.sleep(2)
+        try:
+            if progress_callback:
+                progress_callback(5)
 
-            except subprocess.TimeoutExpired:
-                print(f"[YTDLP] TIMEOUT attempt {attempt+1}")
-            except Exception as e:
-                print(f"[YTDLP] Exception: {e}")
-                time.sleep(2)
+            print(f"[DL_DIRECT] Running direct download")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            print(f"[DL_DIRECT] Return code: {result.returncode}")
+
+            if result.returncode == 0:
+                mp3_files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}*.mp3"))
+                if mp3_files:
+                    filepath = mp3_files[0]
+                    size = os.path.getsize(filepath)
+                    print(f"[DL_DIRECT] Found: {filepath} ({size} bytes)")
+                    if progress_callback:
+                        progress_callback(100)
+                    return filepath
+
+                for ext in ['*.webm', '*.m4a', '*.opus']:
+                    files = glob.glob(os.path.join(DOWNLOAD_PATH, f"{output_name}{ext}"))
+                    for f in files:
+                        new_name = f.rsplit('.', 1)[0] + '.mp3'
+                        try:
+                            os.rename(f, new_name)
+                            return new_name
+                        except:
+                            pass
+            else:
+                stderr_short = result.stderr[-200:] if result.stderr else "none"
+                print(f"[DL_DIRECT] Failed: {stderr_short}")
+
+        except subprocess.TimeoutExpired:
+            print("[DL_DIRECT] TIMEOUT")
+        except Exception as e:
+            print(f"[DL_DIRECT] Exception: {e}")
 
         return None
 
